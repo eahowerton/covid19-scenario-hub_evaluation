@@ -34,19 +34,29 @@ dc <- arrow::open_dataset(paste0(repo_data, folder_path),
                             exclude_invalid_files = TRUE))
 
 
-df_quantile <- dplyr::filter(dc, type == "quantile" & (target == "inc death" |  target == "inc hosp")) %>% 
+df_quantile <- dplyr::filter(dc, type == "quantile") %>%  #& (target == "inc death" |  target == "inc hosp")
   dplyr::collect()
 setDT(df_quantile)
 df_quantile <- df_quantile %>%
   .[, origin_date := as.IDate(origin_date)]
 
 # truth data (from fluview - check with Lucie)
-gs_inc_hosp <- read.csv(paste0(repo_data, "visualization/data-goldstandard/hospitalization.csv"))
-gs_inc_death <- read.csv(paste0(repo_data,"visualization/data-goldstandard/fv_death_incidence_num.csv"))
-gold_standard_data <- rbindlist(l = list(setDT(gs_inc_hosp) %>% 
+gs_inc_hosp <- setDT(read.csv(paste0(repo_data, "visualization/data-goldstandard/hospitalization.csv"))) %>% 
+  .[time_value > "2023-04-16"]
+gs_inc_death <-  setDT(read.csv(paste0(repo_data,"visualization/data-goldstandard/fv_death_incidence_num.csv"))) %>%
+  .[time_value > "2023-04-16"]
+gold_standard_data <- rbindlist(l = list( copy(gs_inc_hosp) %>% 
                                            .[, target := "inc hosp"], 
-                                         setDT(gs_inc_death) %>% 
-                                           .[, target := "inc death"])) %>%
+                                         copy(gs_inc_death) %>% 
+                                           .[, target := "inc death"], 
+                                         copy(gs_inc_hosp) %>% 
+                                           .[, value := cumsum(value), 
+                                             by = .(geo_value_fullname, fips)] %>% 
+                                           .[, target := "cum hosp"], 
+                                         copy(gs_inc_death) %>% 
+                                           .[, value := cumsum(value), 
+                                             by = .(geo_value_fullname, fips)] %>% 
+                                           .[, target := "cum death"])) %>%
   .[, time_value := as.IDate(time_value)] %>%
   rename(obs = "value")
 
@@ -87,8 +97,8 @@ gg_color_hue <- function(n) {
 # COVERAGE ACROSS LOCATIONS AND WEEKS FOR EACH SCENARIO/TARGET
 cov %>%
   .[!is.na(cov) &
-      substr(scenario_id,1,1) %in% c("E", "F") &
-      model_name != "NCSU-COVSIM"] %>%
+      #substr(scenario_id,1,1) %in% c("E", "F") &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
   .[, .(cov_summ = sum(cov)/.N), 
     by = .(alpha, origin_date, target, model_name, scenario_id)] %>%
   ggplot(aes(x = alpha, y = cov_summ, color = model_name)) +
@@ -97,7 +107,7 @@ cov %>%
   #geom_point(size = 1) + 
   facet_grid(cols = vars(scenario_id), rows = vars(target)) + 
   labs(x = "expected coverage", y = "actual coverage") +
-  scale_color_manual(values = c("grey70", "grey45", "black", gg_color_hue(9))) +
+  scale_color_manual(values = c("black", gg_color_hue(8))) +
   scale_x_continuous(expand = c(0,0),
                      label = percent) +
   scale_y_continuous(expand = c(0,0),
@@ -106,24 +116,24 @@ cov %>%
   theme(legend.position = "bottom", 
         legend.title = element_blank(),
         panel.grid = element_blank())
-ggsave("figures/new_analyses/R17_coverage_bymodel_overall.pdf", width = 8, height = 8)
+
+ggsave("figures/new_analyses/R17_coverage_bymodel_overall.pdf", width = 10, height = 5)
 
 # 50% AND 95% COVERAGE ACROSS WEEKS FOR ALL MODELS/TARGETS
 cov %>%
   .[!is.na(cov) & 
-      model_name != "NCSU-COVSIM" &
-      substr(scenario_id,1,1) %in% c("E", "F") &
-      alpha %in% c(0.5, 0.95)] %>%
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble")) &
+      #substr(scenario_id,1,1) %in% c("E", "F") &
+      alpha %in% c(0.5)] %>%
   .[, .(cov_summ = sum(cov)/.N), 
     by = .(alpha, origin_date, target, time_value, model_name, scenario_id)] %>%
   ggplot(aes(x = time_value, y = cov_summ, color = model_name)) + 
-  geom_hline(aes(yintercept = alpha), size = 1) +
+  geom_hline(aes(yintercept = alpha), linetype = "dotted") +
   geom_line() + 
   #geom_point(size = 1) + 
-  facet_grid(cols = vars(scenario_id), rows = vars(alpha, target)) + 
+  facet_grid(rows = vars(scenario_id), cols = vars(target)) + 
   labs(x = "projection week", y = "actual coverage") +
-  scale_color_manual(values = c("grey70", "grey45", "black", gg_color_hue(9))) +
-  scale_linetype_manual(values = c("dashed", "twodash", "dotdash", rep("solid",9))) +
+  scale_color_manual(values = c("black", gg_color_hue(8))) +
   scale_x_date(expand = c(0,0)) +
   scale_y_continuous(expand = c(0,0),
                      label = percent) +
@@ -132,4 +142,143 @@ cov %>%
         legend.title = element_blank(),
         panel.grid = element_blank())
 ggsave("figures/new_analyses/R17_coverage_bymodel_byweek.pdf", width = 8, height = 8)
+
+## QQ PLOT FOR CUMULATIVE TARGETS IN FINAL WEEK
+cov %>%
+  .[, max_time_value := max(time_value), by = .(target)] %>%
+  .[!is.na(cov) &
+      time_value == max_time_value &
+      #substr(scenario_id,1,1) %in% c("E", "F") &
+      substr(target, 1,3) == "cum" &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
+  .[, .(cov_summ = sum(cov)/.N), 
+    by = .(alpha, origin_date, target, model_name, scenario_id)] %>%
+  ggplot(aes(x = alpha, y = cov_summ, color = model_name)) +
+  geom_abline(linetype = "dashed") +
+  geom_line() + 
+  #geom_point(size = 1) + 
+  facet_grid(cols = vars(scenario_id), rows = vars(target)) + 
+  labs(x = "expected coverage", y = "actual coverage") +
+  scale_color_manual(values = c("black", gg_color_hue(8))) +
+  scale_x_continuous(expand = c(0,0),
+                     label = percent) +
+  scale_y_continuous(expand = c(0,0),
+                     label = percent) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        panel.grid = element_blank())
+ggsave("figures/new_analyses/R17_coverage_bymodel_cumulative.pdf", width = 8, height = 4)
+
+df_quantile %>% 
+  .[location == "US" &
+      model_name == "Ensemble_LOP" &
+      type_id %in% c(0.05, 0.25, 0.5, 0.75, 0.95)] %>%
+  .[, quantile := paste0("Q", type_id*100)] %>%
+  data.table::dcast(time_value + scenario_id + target ~ quantile, value.var = "value") %>%
+  ggplot(aes(x = time_value)) + 
+  geom_ribbon(aes(ymin = Q5, ymax = Q95), alpha = 0.2) + 
+  geom_ribbon(aes(ymin = Q25, ymax = Q75), alpha = 0.4) + 
+  geom_line(aes(y = Q50)) + 
+  geom_point(data = gold_standard_data[fips == "US" & time_value > "2023-04-16"], 
+             aes(x = time_value, y = obs)) + 
+  facet_grid(rows = vars(target), 
+             cols = vars(scenario_id), scales = "free") + 
+  theme_bw()
+ 
+
+df_quantile %>% 
+  .[, max_time_value := max(time_value), by = .(target)] %>%
+  .[model_name == "Ensemble_LOP" &
+      target == "cum hosp" &
+      substr(target,1,3) == "cum" & 
+      type_id %in% c(0.05, 0.25, 0.5, 0.75, 0.95) & 
+      time_value == max_time_value] %>% 
+  .[, quantile := paste0("Q", type_id*100)] %>%
+  data.table::dcast(time_value + scenario_id + target + geo_value_fullname + obs ~ quantile, value.var = "value") %>%
+  .[, scenario_letter := factor(substr(scenario_id,1,1), 
+                                levels = rev(LETTERS[1:6]))] %>% 
+  ggplot(aes(y = scenario_letter)) + 
+  geom_segment(aes(x = Q5, xend = Q95, 
+                   yend = scenario_letter), size = 0.2) + 
+  geom_segment(aes(x = Q25, xend = Q75, 
+                   yend = scenario_letter), size = 0.6) + 
+  geom_point(aes(x = Q50), size = 1) +
+  geom_text(aes(x = Q50, label = scenario_letter), color = 'white', size = 1) + 
+  geom_vline(aes(xintercept = obs), color = "red") + 
+  facet_wrap(vars(geo_value_fullname), scales = "free") + 
+  theme_bw() + 
+  theme(axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        axis.title.y = element_blank(),
+        panel.grid.major.y = element_blank(), 
+        panel.grid.minor = element_blank())
+
+
+### MAIN TEXT FIG OPTIONS ------------------------------------------------------
+scenario_labs <- c("Low immune escape", "High immune escape")
+names(scenario_labs) <- paste(c("E", "F"), "2023-04-16", sep = "-")
+
+p1 <- cov %>%
+  .[!is.na(cov) & 
+      target == "inc hosp" &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble")) &
+      substr(scenario_id,1,1) %in% c("E", "F") &
+      alpha %in% c(0.5, 0.9)] %>%
+  .[, .(cov_summ = sum(cov)/.N), 
+    by = .(alpha, origin_date, target, time_value, model_name, scenario_id)] %>%
+  .[, model_name := factor(model_name, levels = c("JHU_IDD-CovidSP",
+                                                  "MOBS_NEU-GLEAM_COVID" , 
+                                                  "NotreDame-FRED",
+                                                  "UNCC-hierbin",
+                                                  "USC-SIkJalpha",
+                                                  "UTA-ImmunoSEIRS",
+                                                  "UVA-adaptive",
+                                                  "UVA-EpiHiper", 
+                                                  "Ensemble_LOP"))] %>%
+  ggplot(aes(x = time_value, y = cov_summ, 
+             alpha = model_name, color = model_name)) + 
+  geom_hline(aes(yintercept = alpha), linetype = "dotted") +
+  geom_line() + 
+  #geom_point(size = 1) + 
+  facet_grid(cols = vars(scenario_id), 
+             rows = vars(alpha), 
+             labeller = labeller(scenario_id = scenario_labs), 
+             switch = "y") + 
+  labs(x = "projection week", y = "actual coverage") +
+  scale_alpha_manual(values = c(rep(0.6, 8), 1)) +
+  scale_color_manual(values = c(rep("gray", 8), "black")) +
+  scale_x_date(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0),
+                     label = percent) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        panel.grid = element_blank())
+
+
+### CHECKS ---
+cov %>%
+  .[!is.na(cov) &
+      #substr(scenario_id,1,1) %in% c("E", "F") &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
+  .[, .(cov_summ = sum(cov)/.N), 
+    by = .(alpha, origin_date, target, model_name, scenario_id)] %>% 
+  .[substr(scenario_id,1,1) == "E" & 
+      alpha == 0.5 & 
+      model_name == "Ensemble_LOP" & 
+      target == "inc hosp"]
+
+cov %>%
+  .[!is.na(cov) & 
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble")) &
+      #substr(scenario_id,1,1) %in% c("E", "F") &
+      alpha %in% c(0.5)] %>%
+  .[, .(cov_summ = sum(cov)/.N), 
+    by = .(alpha, origin_date, target, time_value, model_name, scenario_id)] %>%
+  .[substr(scenario_id,1,1) == "E" & 
+      alpha == 0.5 & 
+      model_name == "Ensemble_LOP" & 
+      target == "inc hosp"] %>%
+  .[, .(t = mean(cov_summ))]
 
