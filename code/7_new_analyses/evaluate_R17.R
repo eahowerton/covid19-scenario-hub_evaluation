@@ -88,6 +88,12 @@ cov <- cov[df_quantile, on = .(quantile = type_id)] %>%
             lwr = NULL, 
             obs = NULL)]
 
+#### CALCULATE WIS 00000--------------------------------------------------------
+
+# calculate WIS for all projections
+wis <-  df_quantile[, wis(type_id,value,obs,IS_components = TRUE),
+                by=.(target, origin_date, time_value, scenario_id, model_name, location, geo_value_fullname, obs)]
+
 #### PLOT RESULTS --------------------------------------------------------------
 gg_color_hue <- function(n) {
   hues = seq(15, 375, length = n + 1)
@@ -141,6 +147,7 @@ cov %>%
   theme(legend.position = "bottom", 
         legend.title = element_blank(),
         panel.grid = element_blank())
+
 ggsave("figures/new_analyses/R17_coverage_bymodel_byweek.pdf", width = 8, height = 8)
 
 ## QQ PLOT FOR CUMULATIVE TARGETS IN FINAL WEEK
@@ -169,6 +176,92 @@ cov %>%
         legend.title = element_blank(),
         panel.grid = element_blank())
 ggsave("figures/new_analyses/R17_coverage_bymodel_cumulative.pdf", width = 8, height = 4)
+
+# WIS OVER TIME BY MODEL AND LOCATION
+wis %>%
+  .[!is.na(WIS) & 
+      target == "inc hosp" &
+      substr(scenario_id,1,1) %in% c("E", "F") &
+      geo_value_fullname == "Florida" &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
+  ggplot(aes(x = time_value, y = WIS/obs, color = model_name)) + 
+  geom_line() + 
+  #geom_point(size = 1) + 
+  facet_grid(rows = vars(model_name), cols = vars(scenario_id), scales = "free") + 
+  labs(x = "projection week", y = "actual coverage") +
+  scale_color_manual(values = c("black", gg_color_hue(8))) +
+  scale_x_date(expand = c(0,0)) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        panel.grid = element_blank())
+
+wis %>%
+  .[!is.na(WIS) & 
+      target == "inc hosp" &
+      geo_value_fullname == "Florida" &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
+  .[, quarter := lubridate::quarter(time_value)] %>%
+  ggplot(aes(x = obs, y = WIS, color = as.factor(quarter))) + 
+  geom_point() + 
+  geom_path() + 
+  facet_grid(rows = vars(scenario_id), cols = vars(model_name), scales = "free") + 
+  scale_color_brewer(palette = "Set1") + 
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        panel.grid = element_blank())
+
+us_latlong <- read.csv("code/7_new_analyses/US_GeoCode.csv")
+
+p1 = gold_standard_data %>%
+  .[us_latlong[, c("latitude", "longitude", "Name")], on = .(geo_value_fullname = Name)] %>%
+  .[!is.na(time_value)] %>%
+  .[, relobs := obs/max(obs), by = c("geo_value_fullname", "target")] %>%
+  .[target == "inc hosp"] %>%
+  ggplot(aes(x = time_value, y = relobs, color = latitude, group = geo_value_fullname)) + 
+  geom_line(alpha = 0.75) + 
+  scale_color_distiller(palette = "Blues", direction = 0) + 
+  scale_x_date(expand = c(0,0)) + 
+  theme_bw() + 
+  theme(axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+  
+p2 = wis %>%
+  .[!is.na(WIS) & 
+      target == "inc hosp" &
+      substr(scenario_id,1,1) %in% c("E", "F") &
+      !(model_name %in% c("NCSU-COVSIM", "Ensemble_LOP_untrimmed", "Ensemble"))] %>%
+  .[, quarter := lubridate::quarter(time_value)] %>%
+  .[, relWIS_rank := rank(WIS/obs), by = .(model_name, location, geo_value_fullname, scenario_id)] %>%
+  .[us_latlong[, c("latitude", "longitude", "Name")], on = .(geo_value_fullname = Name)] %>%
+  .[!is.na(target)] %>%
+  .[, geo_value_fullname := factor(geo_value_fullname)] %>%
+  .[, geo_value_fullname := reorder(geo_value_fullname, latitude)] %>%
+  ggplot(aes(x = time_value, y = geo_value_fullname, fill = relWIS_rank)) + 
+  geom_tile() + 
+  facet_grid(cols = vars(scenario_id), rows = vars(model_name), 
+             scales = "free") + 
+  labs(y = "location (sorted by latitude)") + 
+  scale_fill_distiller(palette = "YlOrBr", direction = 0) + 
+  scale_x_date(expand = c(0,0)) + 
+  theme_bw() + 
+  theme(axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        legend.title = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_blank())
+
+cowplot::plot_grid(
+  cowplot::plot_grid(p1, p1 + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank()), nrow = 1), 
+  p2, 
+  ncol = 1, rel_heights = c(0.2, 0.8))
+
+ggsave("figures/new_analyses/R17_WIS_bymodel_bylocation.pdf", width = 8, height = 10)
 
 df_quantile %>% 
   .[location == "US" &
