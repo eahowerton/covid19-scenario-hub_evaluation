@@ -9,6 +9,7 @@ library(RColorBrewer)
 library(scales)
 library(CombineDistributions)
 
+source("code/7_new_analyses/peak_targets/peak_functions.R")
 
 #### LOAD THE DATA -------------------------------------------------------------
 repo_data <- "../covid19-megaround_data/"
@@ -40,7 +41,7 @@ dc <- arrow::open_dataset(paste0(repo_data, folder_path),
 
 df_sample <- dplyr::filter(dc, type == "sample", 
                            # location %in% c("06","01"), model_name%in% c("Ensemble","JHU_IDD-CovidSP","UVA-EpiHiper"),
-                           target %in% c("inc hosp", "inc death"),
+                           target %in% c("inc hosp"), # JUST DO HOSPS FOR NOW
                            horizon <= 52*2) %>%
   dplyr::collect() %>%
   setDT() 
@@ -49,9 +50,9 @@ df_sample <- df_sample %>%
   .[, origin_date := lubridate::as_date(origin_date)] %>%
   .[, time_value :=  origin_date + horizon*7-1]
 
-# team_models <- unique(df_sample$model_name)
+team_models <- unique(df_sample$model_name)
 # for testing
-team_models <- c("UVA-adaptive", "MOBS_NEU-GLEAM_COVID")
+# team_models <- c("UVA-adaptive", "MOBS_NEU-GLEAM_COVID")
 
 # make a key where dates are indexed by quarter year/season
 date_key_seasons <- data.table::data.table(date = unique(df_sample$time_value)) %>% 
@@ -70,29 +71,29 @@ date_key_yearly <- data.table::data.table(date = lubridate::as_date(unique(df_sa
 
 # PROBABILITY OF PEAKS ----------
 probs <- c(0.01, 0.025, seq(0.05,0.95, 0.05), 0.975, 0.99)
-
-## ~ for whole time period -------
-# Calculate peak size 
-models_peak_targets <- rbind(do.call(rbind,lapply(team_models, function(i) {
-  calculate_peak_size(
-    df_sample %>% .[model_name == i], df_all = NULL, i,
-    peak_size_target = "peak size hosp",
-    peak_group = c("origin_date", "scenario_id", "location", "target",
-                   "type_id"),
-    quantile_vect = probs
-  ) %>% mutate(model_name = i)
-})
-) %>% prep_peak_size(., probs),
-do.call(rbind,lapply(team_models, function(i) {
-  calculate_peak_time(
-    df_sample %>% .[model_name == i], df_all = NULL, i,
-    peak_time_target = "peak time hosp",
-    peak_group = c("origin_date", "scenario_id", "location", "target",
-                   "type_id")
-  ) %>% mutate(model_name = i)
-})
-) %>% prep_peak_time()
-)
+# 
+# ## ~ for whole time period -------
+# # Calculate peak size 
+# models_peak_targets <- rbind(do.call(rbind,lapply(team_models, function(i) {
+#   calculate_peak_size(
+#     df_sample %>% .[model_name == i], df_all = NULL, i,
+#     peak_size_target = "peak size hosp",
+#     peak_group = c("origin_date", "scenario_id", "location", "target",
+#                    "type_id"),
+#     quantile_vect = probs
+#   ) %>% mutate(model_name = i)
+# })
+# ) %>% prep_peak_size(., probs),
+# do.call(rbind,lapply(team_models, function(i) {
+#   calculate_peak_time(
+#     df_sample %>% .[model_name == i], df_all = NULL, i,
+#     peak_time_target = "peak time hosp",
+#     peak_group = c("origin_date", "scenario_id", "location", "target",
+#                    "type_id")
+#   ) %>% mutate(model_name = i)
+# })
+# ) %>% prep_peak_time()
+# )
 ## ~ for yearly period -------
 
 models_peak_yearly <- rbind(do.call(rbind,lapply(team_models, function(i) {
@@ -105,8 +106,8 @@ models_peak_yearly <- rbind(do.call(rbind,lapply(team_models, function(i) {
       df_all = NULL, 
       i,
       peak_size_target = "peak size hosp",
-      peak_group = c("origin_date", "scenario_id", "location", "target",
-                     "type_id"),
+      peak_group = c("origin_date", "scenario_id", "location", 
+                     "target", "time_frame", "type_id"),
       quantile_vect = probs
     ) %>% mutate(model_name = i, time_frame = j)
     res <- rbind(res, res_tmp)
@@ -123,8 +124,8 @@ do.call(rbind,lapply(team_models, function(i) {
         .[model_name == i & time_frame == j], 
       df_all = NULL, i,
       peak_time_target = "peak time hosp",
-      peak_group = c("origin_date", "scenario_id", "location", "target",
-                     "type_id")
+      peak_group = c("origin_date", "scenario_id", "location", 
+                     "target", "time_frame", "type_id")
     ) %>% mutate(model_name = i, time_frame = j)
     res <- rbind(res, res_tmp)
   }
@@ -132,6 +133,8 @@ do.call(rbind,lapply(team_models, function(i) {
 })
 ) %>% prep_peak_time()
 )
+
+arrow::write_parquet(models_peak_yearly,paste0("code/7_new_analyses/peak_targets/models_peak_hosp_yearly.parquet"))
 
 
 ## ~ for seasonal period -------
@@ -146,8 +149,8 @@ models_peak_seasons <- rbind(do.call(rbind,lapply(team_models, function(i) {
       df_all = NULL, 
       i,
       peak_size_target = "peak size hosp",
-      peak_group = c("origin_date", "scenario_id", "location", "target",
-                     "type_id"),
+      peak_group = c("origin_date", "scenario_id", "location", 
+                     "target", "time_frame", "type_id"),
       quantile_vect = probs
     ) %>% mutate(model_name = i, time_frame = j)
     res <- rbind(res, res_tmp)
@@ -164,8 +167,8 @@ do.call(rbind,lapply(team_models, function(i) {
         .[model_name == i & time_frame == j], 
       df_all = NULL, i,
       peak_time_target = "peak time hosp",
-      peak_group = c("origin_date", "scenario_id", "location", "target",
-                     "type_id")
+      peak_group = c("origin_date", "scenario_id", "location", 
+                     "target", "time_frame", "type_id")
     ) %>% mutate(model_name = i, time_frame = j)
     res <- rbind(res, res_tmp)
   }
@@ -173,6 +176,8 @@ do.call(rbind,lapply(team_models, function(i) {
 })
 ) %>% prep_peak_time()
 )
+
+arrow::write_parquet(models_peak_seasons,paste0("code/7_new_analyses/peak_targets/models_peak_hosp_seasons.parquet"))
 
 # CALCULATE ENSEMBLES -----------
 
@@ -194,14 +199,3 @@ for(ens in c("LOP_untrimmed","LOP_trimmed")){
   }
 }
 
-
-# # ADD GROUNDTRUTH ------
-# 
-# # add peak timing gold standard 
-# gold_standard_peak <- gold_standard_data %>%
-#   .[date_key, on = .(time_value = date)] %>% na.omit() %>% .[str_detect(target, "inc")] %>%
-#   .[, .(peak_value = max(obs), 
-#         peak_timing = as.character(time_value[which.max(obs)])), 
-#     by = .(geo_value_fullname, fips, target, time_frame)] %>%  
-#   .[, peak_timing := as.numeric((as.Date(peak_timing) - as.Date("2023-04-16") + 1) / 7)] %>% # horizon
-#   melt(., measure.vars = c("peak_timing","peak_value"), variable.name = "metric", value.name = "obs") 
